@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import BeaconHero from '../components/BeaconHero';
 import { supabase } from '../lib/supabaseClient';
@@ -13,7 +13,28 @@ export default function Signup() {
   const [userId, setUserId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [awaitingConfirmation, setAwaitingConfirmation] = useState(false);
   const navigate = useNavigate();
+
+  // If the user is arriving back after clicking the confirmation link,
+  // resume exactly where they left off instead of starting over.
+  useEffect(() => {
+    const resume = async () => {
+      const pending = localStorage.getItem('sg_pending_signup');
+      if (!pending) return;
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        const saved = JSON.parse(pending);
+        setForm(f => ({ ...f, name: saved.name, partnerName: saved.partnerName, partnerEmail: saved.partnerEmail }));
+        setUserId(session.user.id);
+        setAwaitingConfirmation(false);
+        setStep(saved.partnerName ? 3 : 2);
+        localStorage.removeItem('sg_pending_signup');
+      }
+    };
+    resume();
+  }, []);
 
   const update = (key, value) => setForm(f => ({ ...f, [key]: value }));
 
@@ -24,31 +45,31 @@ export default function Signup() {
   const handleCreateAccount = async () => {
     setError('');
     setLoading(true);
+
     const { data, error: signUpError } = await supabase.auth.signUp({
       email: form.email,
       password: form.password,
+      options: {
+        data: { first_name: form.name, age_confirmed: form.ageConfirmed },
+        emailRedirectTo: `${window.location.origin}/signup`,
+      },
     });
+
     if (signUpError) {
       setError(signUpError.message);
       setLoading(false);
       return;
     }
-    const newUserId = data.user?.id;
-    setUserId(newUserId);
 
-    const { error: profileError } = await supabase.from('profiles').insert({
-      id: newUserId,
-      first_name: form.name,
-      email: form.email,
-      age_confirmed: form.ageConfirmed,
-    });
-    if (profileError) {
-      setError(profileError.message);
-      setLoading(false);
-      return;
-    }
     setLoading(false);
-    setStep(2);
+
+    if (data.session) {
+      setUserId(data.user.id);
+      setStep(2);
+    } else {
+      localStorage.setItem('sg_pending_signup', JSON.stringify({ name: form.name }));
+      setAwaitingConfirmation(true);
+    }
   };
 
   const handleSendInvite = async () => {
@@ -91,6 +112,20 @@ export default function Signup() {
     navigate('/dashboard', { state: { name: form.name, partnerName: form.partnerName } });
   };
 
+  if (awaitingConfirmation) {
+    return (
+      <div className="container" style={{ paddingTop: 40, paddingBottom: 60 }}>
+        <BeaconHero title="Check your email" subtitle="Confirm your account to continue" />
+        <div className="card" style={{ textAlign: 'center', padding: '32px 20px' }}>
+          <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 6px' }}>We sent a confirmation link to {form.email}</p>
+          <p style={{ fontSize: 13, color: 'var(--color-ink-muted)', margin: 0 }}>
+            Click the link in that email on this device to come right back here and continue inviting your partner.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="container" style={{ paddingTop: 40, paddingBottom: 60 }}>
       <BeaconHero
@@ -123,7 +158,7 @@ export default function Signup() {
             I'm 18 or older and setting this up on my own device.
           </label>
 
-          {error && step === 1 && <p style={{ color: 'var(--color-danger)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
+          {error && <p style={{ color: 'var(--color-danger)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
           <button className="btn btn-primary" disabled={!canContinueStep1 || loading} onClick={handleCreateAccount}>
             {loading ? 'Creating account…' : 'Continue'}
           </button>
@@ -178,7 +213,7 @@ export default function Signup() {
             {form.partnerName || 'They'} have agreed to this role and are 18 or older.
           </label>
 
-          {error && step === 3 && <p style={{ color: 'var(--color-danger)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
+          {error && <p style={{ color: 'var(--color-danger)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
           <button className="btn btn-primary" disabled={!canFinish || loading} onClick={handleSendInvite}>
             {loading ? 'Sending invite…' : 'Send invite'}
           </button>
@@ -191,7 +226,7 @@ export default function Signup() {
 function StepDots({ step }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      {[1, 2, 3].map((n, i) => (
+      {[1, 2, 3].map((n) => (
         <div key={n} style={{ display: 'flex', alignItems: 'center', gap: 6, flex: n < 3 ? 1 : 'unset' }}>
           <div style={{
             width: 24, height: 24, borderRadius: '50%',
